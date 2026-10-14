@@ -14,14 +14,16 @@ lang = (sys.argv[4] if len(sys.argv) > 4 else "ru") or None
 per_cue = int(sys.argv[5]) if len(sys.argv) > 5 else 0
 
 # cuBLAS/cuDNN come from pip nvidia-* wheels; ctranslate2 does not look there on Windows
-for sp in site.getsitepackages():
+for sp in site.getsitepackages() if hasattr(os, "add_dll_directory") else []:
     for d in glob.glob(os.path.join(sp, "nvidia", "*", "bin")):
         os.add_dll_directory(d)
         os.environ["PATH"] = d + os.pathsep + os.environ["PATH"]
 
+import ctranslate2  # noqa: E402
 from faster_whisper import WhisperModel  # noqa: E402
 
-model = WhisperModel(model_name, device="cuda", compute_type="float16")
+gpu = ctranslate2.get_cuda_device_count() > 0  # no NVIDIA card: CPU int8, slower but works
+model = WhisperModel(model_name, device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8")
 segments, info = model.transcribe(src, language=lang, word_timestamps=True, vad_filter=True)
 
 cues = []

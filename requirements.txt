@@ -1,7 +1,7 @@
 faster-whisper==1.2.1
 av<16  # av 16+ dropped metadata_errors used by faster-whisper 1.2.1
-nvidia-cublas-cu12
-nvidia-cudnn-cu12>=9,<10
+nvidia-cublas-cu12; sys_platform == "win32"  # CUDA libs for Whisper on Windows
+nvidia-cudnn-cu12>=9,<10; sys_platform == "win32"
 # --music: install torch first from the CUDA index (RTX 50xx needs cu128):
 #   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 demucs==4.1.0

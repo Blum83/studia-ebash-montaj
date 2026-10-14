@@ -12,7 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from montage import CACHE, key, probe
+from montage import CACHE, key, probe, venc
 
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
              "face_landmarker/float16/1/face_landmarker.task")
@@ -124,7 +124,7 @@ def apply(video):
     # видео без потерь заметных глазу (CQ 16), звук копией — монтаж дальше режет этот файл как исходник
     enc = subprocess.Popen(["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
                             "-r", fps_str, "-i", "-", "-i", str(video), "-map", "0:v", "-map", "1:a?",
-                            "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "16", "-c:a", "copy", str(part)],
+                            *venc(16), "-c:a", "copy", str(part)],
                            stdin=subprocess.PIPE)
     small = (DETECT_W, round(h * DETECT_W / w))
     prev, n, found = None, 0, 0

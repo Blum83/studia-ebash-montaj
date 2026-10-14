@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from montage import CACHE, normalize
+from montage import CACHE, normalize, venc
 
 SRC = Path(r"F:\Rocket League")
 # (file, start, end) — replays start with the previous goal's "SCORED!" banner, so their first ~2 s are cut
@@ -118,7 +118,7 @@ def main():
     graph.write_text("".join(g), encoding="utf-8")
     subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "warning", "-stats", *inputs,
                     "-/filter_complex", str(graph), "-map", "[v]", "-map", "[a]",
-                    "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "20", "-c:a", "aac", "-b:a", "192k",
+                    *venc(20), "-c:a", "aac", "-b:a", "192k",
                     "-movflags", "+faststart", str(OUT)], check=True)
     graph.unlink()
     normalize(OUT)

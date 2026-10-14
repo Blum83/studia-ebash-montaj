@@ -13,6 +13,7 @@ Output: out/<name>_edit.mp4, out/<name>.ass, out/<name>.srt, out/<name>.edl (cut
 Rules:  CLAUDE.md, section "Мои правила монтажа"
 """
 import bisect
+import functools
 import glob
 import itertools
 import json
@@ -58,8 +59,24 @@ FILLER_PROMPT = "Ээ, ну, мм, это самое... Короче, вот."
 HALLUCINATION = re.compile(r"субтитры (сделал|создавал|подготовил)|dimatorzok|продолжение следует", re.I)
 
 
+@functools.cache
+def has_gpu():
+    """NVIDIA card with CUDA: Whisper/Demucs on GPU and NVENC. Without one everything still runs, slower, on CPU."""
+    import ctranslate2
+    return ctranslate2.get_cuda_device_count() > 0
+
+
+def venc(q):
+    """H.264 encoder args at quality q (lower = better): NVENC on NVIDIA, libx264 anywhere else."""
+    if has_gpu():
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(q)]
+    return ["-c:v", "libx264", "-preset", "medium", "-crf", str(q)]
+
+
 def load_cuda_dlls():
     # cuBLAS/cuDNN come from pip nvidia-* wheels; ctranslate2 does not look there on Windows
+    if not hasattr(os, "add_dll_directory"):  # Linux/macOS find their libraries themselves
+        return
     for sp in site.getsitepackages():
         for d in glob.glob(os.path.join(sp, "nvidia", "*", "bin")):
             os.add_dll_directory(d)
@@ -81,14 +98,15 @@ def separate(video):
     import torch
     from demucs.apply import apply_model
     from demucs.pretrained import get_model
-    model = get_model("htdemucs").cuda().eval()
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    model = get_model("htdemucs").to(dev).eval()
     sr = model.samplerate
     pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-vn", "-ac", "2", "-ar", str(sr),
                           "-f", "f32le", "-"], capture_output=True, check=True).stdout
     x = torch.from_numpy(np.frombuffer(pcm, np.float32).reshape(-1, 2).T.copy())
     mean, std = x.mean(), x.std()
     with torch.no_grad():
-        stems = apply_model(model, ((x - mean) / std)[None].cuda(), device="cuda", overlap=0.25)[0].cpu() * std + mean
+        stems = apply_model(model, ((x - mean) / std)[None].to(dev), device=dev, overlap=0.25)[0].cpu() * std + mean
     v = stems[model.sources.index("vocals")]
     for path, y in ((voice, v), (music, stems.sum(0) - v)):
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "f32le", "-ar", str(sr), "-ac", "2", "-i", "-",
@@ -135,7 +153,7 @@ def transcribe(audio, isl, dur, cache):
     load_cuda_dlls()
     from faster_whisper import WhisperModel
     from faster_whisper.audio import decode_audio
-    model = WhisperModel(MODEL, device="cuda", compute_type="float16")
+    model = WhisperModel(MODEL, device="cuda" if has_gpu() else "cpu", compute_type="float16" if has_gpu() else "int8")
     lang, prob, _ = model.detect_language(decode_audio(str(audio)), vad_filter=True)
     if lang != LANG and prob >= LANG_SURE:
         # forced LANG on other speech makes Whisper silently translate it (seen on an English video)
@@ -389,7 +407,7 @@ def render(video, iv, ass_text, out, fps_str, fps, frame, stems=None, denoise=Fa
         Path(tmp, "graph.txt").write_text(graph, encoding="utf-8")
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "warning", "-stats", *inputs,
                         "-/filter_complex", "graph.txt", "-map", "[v]", "-map", "[a]",
-                        "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "21", "-c:a", "aac", "-b:a", "192k",
+                        *venc(21), "-c:a", "aac", "-b:a", "192k",
                         "-movflags", "+faststart", str(out.resolve())], cwd=tmp, check=True)
 
 
