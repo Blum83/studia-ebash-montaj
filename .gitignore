@@ -1,0 +1,14 @@
+# environment
+.venv/
+__pycache__/
+.claude/settings.local.json
+
+# credentials — never commit (YouTube OAuth client + token for upload.py)
+secrets/
+.env
+
+# renders, caches, test media
+out/
+samples/*.mp4
+samples/*.ass
+samples/*.words.json
