@@ -12,3 +12,5 @@ mediapipe
 opencv-contrib-python
 # rl_short.py: beats of the song
 librosa
+# fetch.py: stream audio and clips
+yt-dlp

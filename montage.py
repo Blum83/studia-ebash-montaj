@@ -47,6 +47,7 @@ POP = 112             # current word grows 100% -> POP% ...
 POP_MS = 80           # ... over this many ms
 LUFS = -14            # Reels/Shorts/TikTok normalise to about -14 LUFS anyway
 PEAK = 0.84           # limiter ceiling, about -1.5 dBFS
+MAX_GAIN = 20         # dB; a near-silent take is left quiet rather than turned into amplified hiss
 DENOISE = "afftdn=nf=-25"
 LANG_SURE = 0.8       # stop when Whisper is this sure the speech is not LANG
 # fillers Whisper writes when prompted for them; "а"/"ну" are real words too, so they stay
@@ -64,9 +65,15 @@ def load_cuda_dlls():
             os.environ["PATH"] = d + os.pathsep + os.environ["PATH"]
 
 
+def key(video):
+    """Cache name: same file name from another day/folder must not reuse this file's transcript or stems."""
+    st = Path(video).stat()
+    return f"{Path(video).stem}.{st.st_size:x}{int(st.st_mtime):x}"
+
+
 def separate(video):
     """Voice and music stems via Demucs htdemucs on GPU, cached in out/cache."""
-    voice, music = CACHE / f"{video.stem}.voice.wav", CACHE / f"{video.stem}.music.wav"
+    voice, music = CACHE / f"{key(video)}.voice.wav", CACHE / f"{key(video)}.music.wav"
     if voice.exists() and music.exists():
         return voice, music
     import numpy as np
@@ -294,6 +301,7 @@ def faces(video, iv, w, h):
         prev = tuple(sorted(c)[len(c) // 2] for c in zip(*pts)) if pts else prev
         out.append(prev)
     cap.release()
+    lm.close()
     return out
 
 
@@ -381,7 +389,7 @@ def loudness(path):
 def normalize(out):
     """Gain to LUFS + peak limiter, video copied. loudnorm alone stops short: it will not push peaks over TP."""
     tmp = out.with_suffix(".norm.mp4")
-    gain = LUFS - loudness(out)
+    gain = min(LUFS - loudness(out), MAX_GAIN)
     for _ in range(4):  # the limiter shaves a little loudness off; a second, smaller gain closes the gap
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(out), "-c:v", "copy", "-af",
                         f"volume={gain:.2f}dB,alimiter=limit={PEAK}:attack=5:release=50:level=false",
@@ -389,7 +397,7 @@ def normalize(out):
         miss = LUFS - loudness(tmp)
         if abs(miss) < 0.3:
             break
-        gain += miss
+        gain = min(gain + miss, MAX_GAIN)
     tmp.replace(out)
 
 
@@ -401,7 +409,7 @@ def main(video, music=False, dry_run=False, makeup=False, denoise=False):
     speech = stems[0] if stems else video  # with music, pauses and words come from the clean voice
     print(f"{video.name}: {dur:.1f}s, {w}x{h}")
     isl = islands(silences(speech, dur), dur)
-    words = transcribe(speech, isl, dur, CACHE / f"{video.stem}{'.voice' if stems else ''}.words.json")
+    words = transcribe(speech, isl, dur, CACHE / f"{key(video)}{'.voice' if stems else ''}.words.json")
     phs = [p for p in phrases(words) if not HALLUCINATION.search(text(p))]
     fillers = [w for p in phs for w in p if is_filler(w)]
     phs = [q for q in ([w for w in p if not is_filler(w)] for p in phs) if q]

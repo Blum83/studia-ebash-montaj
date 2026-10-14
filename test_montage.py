@@ -64,6 +64,13 @@ assert "00:00:01:00 00:00:02:00 01:00:00:00 01:00:01:00" in edl and "01:00:01:00
 cw, ch, xs, ys, px, py = framing([(0.9, 0.5), (0.5, 0.5)], [[0, 1], [1, 2]], 1920, 1080)
 assert (cw, ch) == (606, 1080) and xs == [1920 - 606, 1920 / 2 - 303] and abs(px[1] - 0.5) < 1e-9
 assert steps("t", [0, 1, 2], [5, 5, 7]) == "5.0000+2.0000*gte(t,2.0000)"
+# cache key: same file name with other content -> other cache entry
+import os, tempfile
+from montage import key
+d1, d2 = tempfile.mkdtemp(), tempfile.mkdtemp()
+open(os.path.join(d1, "IMG_0001.mp4"), "wb").write(b"a"); open(os.path.join(d2, "IMG_0001.mp4"), "wb").write(b"bb")
+assert key(os.path.join(d1, "IMG_0001.mp4")) != key(os.path.join(d2, "IMG_0001.mp4"))
+
 # rl_short: every cut lands on a beat, clip ends (the goal) untouched, starts never below 0
 from rl_short import on_beat
 grid = np.arange(0, 30, 0.4)

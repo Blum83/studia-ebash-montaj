@@ -12,7 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from montage import CACHE, probe
+from montage import CACHE, key, probe
 
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
              "face_landmarker/float16/1/face_landmarker.task")
@@ -112,7 +112,8 @@ def frame_size(video):
 
 def apply(video):
     video = Path(video)
-    out = CACHE / f"{video.stem}.makeup.mp4"
+    out = CACHE / f"{key(video)}.makeup.mp4"
+    part = out.with_suffix(".part.mp4")  # an interrupted run must not leave a half file that looks cached
     if out.exists():
         return out
     _, _, fps_str, fps, dur = probe(video)
@@ -123,7 +124,7 @@ def apply(video):
     # видео без потерь заметных глазу (CQ 16), звук копией — монтаж дальше режет этот файл как исходник
     enc = subprocess.Popen(["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
                             "-r", fps_str, "-i", "-", "-i", str(video), "-map", "0:v", "-map", "1:a?",
-                            "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "16", "-c:a", "copy", str(out)],
+                            "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "16", "-c:a", "copy", str(part)],
                            stdin=subprocess.PIPE)
     small = (DETECT_W, round(h * DETECT_W / w))
     prev, n, found = None, 0, 0
@@ -144,8 +145,9 @@ def apply(video):
             print(f"\r  makeup {n / fps:.0f}/{dur:.0f}s", end="", flush=True)
     enc.stdin.close()
     if dec.wait() or enc.wait():
-        out.unlink(missing_ok=True)
+        part.unlink(missing_ok=True)
         sys.exit("makeup: ffmpeg failed")
+    part.replace(out)
     print(f"\r  makeup: лицо найдено в {found}/{n} кадрах -> {out}")
     return out
 

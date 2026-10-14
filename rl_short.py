@@ -26,7 +26,7 @@ CLIPS = [
     ("Rocket League_2024.11.05-10.57.mp4", 0.0, 6.5),
 ]
 # glob: the "É" in the path is stored decomposed on disk and does not survive being typed
-MUSIC = glob.glob(r"F:\Daunloads\*\Spotify\Playlists\Blumination*\42.*APT.mp3")[0]
+MUSIC_GLOB = r"F:\Daunloads\*\Spotify\Playlists\Blumination*\42.*APT.mp3"
 # APT. choruses ("Don't you want me..." + "아파트" hook), 16 bars each, found by lyrics + chroma match;
 # bar-aligned so the joins stay on the beat. Chained, repeated until the video ends.
 CHORUSES = [(32.276, 58.05), (70.95, 96.72)]
@@ -38,11 +38,18 @@ W, H, FPS = 1080, 1920, 60
 OUT = Path(__file__).parent / "out" / "rl_short.mp4"
 
 
+def music():
+    found = glob.glob(MUSIC_GLOB)
+    if not found:
+        raise SystemExit(f"song not found: {MUSIC_GLOB}")
+    return found[0]
+
+
 def song_beats():
-    cache = CACHE / (Path(MUSIC).stem + ".beats.npy")
+    cache = CACHE / (Path(music()).stem + ".beats.npy")
     if not cache.exists():
         import librosa
-        y, sr = librosa.load(MUSIC, sr=22050, mono=True)
+        y, sr = librosa.load(music(), sr=22050, mono=True)
         CACHE.mkdir(parents=True, exist_ok=True)
         np.save(cache, librosa.beat.beat_track(y=y, sr=sr, units="time")[1])
     return np.load(cache)
@@ -74,7 +81,7 @@ def on_beat(clips, grid, min_len=1.0, fps=FPS):
         ok = [t for t in grid if cum + min_len <= t <= cum + e]  # keeps start >= 0 and the clip >= min_len
         t = min(ok, key=lambda t: abs(t - (cum + e - s))) if ok else cum + e - s
         t = round(t * fps) / fps
-        out.append((f, e - (t - cum), e))
+        out.append((f, max(0.0, e - (t - cum)), e))
         cum = t
     return out
 
@@ -105,7 +112,7 @@ def main():
     g.append("".join(f"[p{j}]" for j in range(k)) + f"concat=n={k}:v=0:a=1,aresample=48000,volume={MUSIC_VOL}[m];"
              f"[ca]volume={GAME_VOL}[game];[m][game]amix=inputs=2:normalize=0,"
              f"afade=t=out:st={total - OUTRO:.3f}:d={OUTRO}[a]")
-    inputs = [x for f, _, _ in CLIPS for x in ("-i", str(SRC / f))] + ["-i", MUSIC]
+    inputs = [x for f, _, _ in CLIPS for x in ("-i", str(SRC / f))] + ["-i", music()]
     OUT.parent.mkdir(exist_ok=True)
     graph = OUT.with_suffix(".graph.txt")
     graph.write_text("".join(g), encoding="utf-8")
