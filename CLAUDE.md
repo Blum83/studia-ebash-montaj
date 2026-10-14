@@ -1,54 +1,56 @@
-# Монтаж рилсов/шортсов — говорящая голова, 9:16, русский
+# Reels / Shorts editing — talking head, 9:16
 
-**Перед каждым новым роликом перечитай этот файл целиком и примени «Мои правила монтажа».**
-Каждую правку пользователя по ходу работы записывай в «Мои правила монтажа» отдельным правилом (дата, суть, где применено — константа/код в `montage.py`) и сразу вноси в код.
+**Before every new video, re-read this whole file and apply "My editing rules".**
+Write every correction the user makes as a separate rule under "My editing rules" (date, what, where it lives — constant/code in `montage.py`) and put it into the code right away. Write rules in the language the user writes in.
+Talk to the user in their language. Speech in the videos is Russian by default; any other language goes through `--lang=xx`.
 
-## Пайплайн — `montage.py`
+## Pipeline — `montage.py`
 
 ```
 .venv\Scripts\python montage.py <video> [--music] [--makeup] [--denoise] [--dry-run] [--lang=en]
 ```
 
-1. **Звук → участки речи.** `silencedetect`, пауза > `PAUSE` = 0.4 с; порог тишины относительный — на `SILENCE_BELOW` = 25 dB ниже громких мест этой записи (90-й процентиль), т.к. тихий микс стрима (−46 dB) целиком лежит под любым фиксированным порогом. С `--music` сначала Demucs (htdemucs, GPU) делит голос/музыку, и всё дальше считается по чистому голосу.
-2. **Транскрипция.** faster-whisper `large-v3`, `ru`, cuda float16, word timestamps — только по участкам речи (иначе Whisper растягивает слова на паузы). Галлюцинации Whisper («Субтитры сделал…», «Продолжение следует…») выкидываются. Перед распознаванием — проверка языка: если Whisper ≥80% уверен, что речь не русская, скрипт останавливается (иначе он молча переводит). Подсказка `FILLER_PROMPT` заставляет записывать «ээ/мм».
-3. **Дубли.** Фраза, ≥60% которой (`TAKE_MATCH`, ≥2 слов) подряд повторяется в одной из 3 следующих фраз, — неудачный дубль; остаётся последняя попытка.
-4. **План до рендера.** Печатается: длительность до/после, список вырезаемых дублей с таймкодами, сколько ушло на паузы. `--dry-run` — только план, без рендера.
-5. **Склейки.** Паузы > 0.4 с вырезаются, у краёв речи остаётся `PAD` = 0.15 с; на стыках аудио-кроссфейд `XFADE` = 30 мс. Звук без слов (смех, вздох) сохраняется. Слова-паразиты («ээ», «мм», «хм», `FILLER`) вырезаются внутри фраз. `--denoise` — шумоподавление голоса (`afftdn`). Границы — по сетке кадров, длина звука = длине видео; длительность берётся по видеодорожке (у кружков Telegram видео короче звука).
-6. **Картинка.** Кроп 9:16 по лицу (MediaPipe Face Landmarker, медиана 3 кадров на кусок; без лица — центр) → 1080×1920; зум центрируется на лице; на склейках плавный зум 100% ↔ 108%; в конце хвост `OUTRO` = 1 с с затемнением.
-7. **Субтитры.** Пословные `.ass`: Arial bold 110 px, по центру, строки по 2–3 слова, текущее слово жёлтое и «выпрыгивает» до 112% за 80 мс (`POP`). Вшиваются.
-8. **Выход.** `out/<имя>_edit.mp4` (H.264 NVENC, CQ 21, AAC 192k, faststart), громкость −14 LUFS (усиление + лимитер −1.5 dBFS, `normalize()`), + `out/<имя>.ass`, `.srt`, `.edl` (CMX 3600: импорт в DaVinci/Premiere для ручной доводки, клип слинковать по имени). Кэш: `out/cache/<имя>.<размер+mtime>.*` — ключ включает размер и дату файла, чтобы два разных `IMG_0001.mp4` не делили транскрипт (транскрипт `*.words.json` — удалить, если поменялись модель, `SILENCE_BELOW`, `PAUSE` или `FILLER_PROMPT`; стемы `*.voice.wav`/`*.music.wav`). Нормализация поднимает громкость максимум на 40 dB (`MAX_GAIN`): тихому миксу стрима (−46 LUFS) хватает, пустой дубль не превращается в шипение.
+1. **Sound → speech islands.** `silencedetect`, pause > `PAUSE` = 0.4 s. The silence threshold is relative: `SILENCE_BELOW` = 25 dB under this recording's loud level (90th percentile) — a quiet stream mix (−46 dB) sits entirely under any fixed threshold. With `--music`, Demucs (htdemucs) first splits voice from music and everything below works on the clean voice.
+2. **Transcription.** faster-whisper `large-v3`, word timestamps, only over the speech islands (otherwise Whisper stretches words over pauses). GPU float16 when there is an NVIDIA card (`has_gpu()`), CPU int8 otherwise. Typical Whisper hallucinations («Субтитры сделал…», «Продолжение следует…») are dropped. Language check first: if Whisper is ≥80% sure the speech is not `LANG`, the script stops (forced language makes it translate silently) — then run with `--lang=xx`. `FILLER_PROMPT` makes it write «ээ/мм» (Russian only).
+3. **Retakes.** A phrase ≥60% of which (`TAKE_MATCH`, ≥2 words) reappears contiguously in one of the next 3 phrases is a failed take; the last attempt stays.
+4. **Plan before rendering.** Printed: duration before/after, retakes with timecodes, fillers, how much went to pauses. `--dry-run` prints the plan and stops.
+5. **Cuts.** Pauses > 0.4 s are cut, `PAD` = 0.15 s kept at speech edges; `XFADE` = 30 ms audio crossfade at each join. Sound without words (laugh, sigh) is kept. Fillers («ээ», «мм», «хм», `FILLER`) are cut inside phrases (Russian only). `--denoise` — voice noise reduction (`afftdn`). Cuts on the frame grid, audio length = video length; duration taken from the video stream (Telegram circles end before their audio).
+6. **Picture.** 9:16 crop following the face (MediaPipe Face Landmarker, median of 3 frames per piece; centre when no face) → 1080×1920; zoom centred on the face; smooth 100% ↔ 108% zoom across cuts; `OUTRO` = 1 s tail with fade to black.
+7. **Captions.** Word-by-word `.ass`: Arial bold 110 px, centred, 2–3 words per line, current word yellow and popping to 112% in 80 ms (`POP`). Burned in.
+8. **Output.** `out/<name>_edit.mp4` (H.264 — NVENC CQ 21, or libx264 CRF 21 without NVIDIA via `venc()`; AAC 192k, faststart), loudness −14 LUFS (gain + limiter at −1.5 dBFS, `normalize()`, gain capped at 40 dB `MAX_GAIN` so an empty take does not turn into hiss), plus `out/<name>.ass`, `.srt`, `.edl` (CMX 3600: import into DaVinci/Premiere for manual polishing, relink the clip by name). Cache: `out/cache/<name>.<size+mtime>.*` — the key includes size and date so two different `IMG_0001.mp4` never share a transcript (delete `*.words.json` after changing the model, `SILENCE_BELOW`, `PAUSE` or `FILLER_PROMPT`; stems `*.voice.wav`/`*.music.wav`).
 
-Проверка логики без GPU: `.venv\Scripts\python test_montage.py`.
+Logic check without GPU or video: `.venv\Scripts\python test_montage.py`.
 
-**Макияж** — `--makeup` (или отдельно `makeup.py <video>`): MediaPipe Face Landmarker (модель качается в `out/cache/face_landmarker.task`) → помада, румяна, сглаживание кожи (цвет в LAB, только a/b) → `out/cache/<имя>.<ключ>.makeup.mp4` с исходным звуком (пишется через `.part.mp4`, прерванный запуск не оставляет битый кэш); рендер режет его вместо исходника. Константы `LIP_*`, `BLUSH_*`, `SKIN`, `SMOOTH` в `makeup.py`; после их смены удалить `*.makeup.mp4`.
+**Makeup** — `--makeup` (or standalone `makeup.py <video>`): MediaPipe Face Landmarker (model downloads to `out/cache/face_landmarker.task`) → lipstick, blush, skin smoothing (colour in LAB, a/b only) → `out/cache/<name>.<key>.makeup.mp4` with the original audio (written via `.part.mp4`, an interrupted run leaves no broken cache); the render cuts it instead of the source. Constants `LIP_*`, `BLUSH_*`, `SKIN`, `SMOOTH` in `makeup.py`; delete `*.makeup.mp4` after changing them.
 
-**Геймплей-шортсы** (не говорящая голова) — `rl_short.py`: список клипов с таймкодами `CLIPS`, повторы встык, 16:9 по ширине поверх размытой подложки 9:16, музыка — только припевы песни; звук игры под ней (`GAME_VOL`, по умолчанию 0.45, 0 — выключен) (`CHORUSES`, по тактам, по кругу до конца видео); склейки голов — на битах песни (librosa, начало клипа сдвигается ≤ полдоли, конец-гол не трогается), 60 fps, −14 LUFS → `out/rl_short.mp4`. Песня ищется по маске `MUSIC_GLOB` (в пути «É» в другой юникод-форме — набрать путь руками нельзя).
-**Загрузка на YouTube** — `upload.py <video> --title ... [--tags a,b] [--privacy] [--publish-at ISO] [--category 20] [--dry-run]`: YouTube Data API v3, OAuth-клиент `secrets/client_secret.json` (Desktop app), токен `secrets/token.json`. Без аудита Google видео загружается как private.
-**Нарезка эфиров** — `fetch.py <url> [--top 10] [--pre 20] [--post 8] [--no-video]`: yt-dlp качает только звук → всплески громкости относительно фона минуты → качает только эти куски (1080p60) в `out/streams/<id>/<старт>.mp4` и печатает `CLIPS` для `rl_short.py`.
-**Проверка видео** — `yt_check.py [id|url ...]` (без аргументов — последние 50 видео канала): отказы, ошибки обработки, блок по странам, 18+, «для детей», длина для Shorts. Какой трек поймал Content ID — только в Studio.
-Окружение: `.venv` (Python 3.14), зависимости в `requirements.txt`; ffmpeg 9 из winget; RTX 5070 (sm_120) → torch cu128.
+**Gameplay Shorts** (not talking head) — `rl_short.py`: clip list with timecodes `CLIPS`, replays back to back, 16:9 full width over a blurred 9:16 fill; music is only the song's choruses (`CHORUSES`, bar-aligned, looped to the video length) with game sound under it (`GAME_VOL`, default 0.45, 0 = muted); goal cuts land on the song's beats (librosa; the clip start moves ≤ half a beat, the end — the goal — never moves), 60 fps, −14 LUFS → `out/rl_short.mp4`. The song is found by the `MUSIC_GLOB` mask (the path has «É» in another Unicode form and cannot be typed). Paths are the repository author's — change them for other clips.
+**YouTube upload** — `upload.py <video> --title ... [--tags a,b] [--privacy] [--publish-at ISO] [--category 20] [--dry-run]`: YouTube Data API v3, OAuth client `secrets/client_secret.json` (Desktop app), token `secrets/token.json`. Until Google audits the app, uploads are private.
+**Stream highlights** — `fetch.py <url> [--top 10] [--pre 20] [--post 8] [--no-video]`: yt-dlp downloads only the audio → loudness spikes over the minute's background → downloads only those pieces (1080p60) to `out/streams/<id>/<start>.mp4` and prints `CLIPS` for `rl_short.py`.
+**Video check** — `yt_check.py [id|url ...]` (no args — last 50 channel videos): rejections, processing errors, country blocks, 18+, "made for kids", Shorts length. Which track Content ID caught is only in Studio.
+Environment: `.venv` (Python 3.14), dependencies in `requirements.txt`; ffmpeg from winget; for NVIDIA RTX 30/40/50 torch from the cu128 index (see README). Works without NVIDIA, slower.
 
-## Известные ограничения (проверить на живой записи)
+## Known limits (check on a live recording)
 
-- **Слова-паразиты:** вырезание «ээ/мм» ещё ни разу не срабатывало на реальной речи — `FILLER_PROMPT` может и пропускать, и выдумывать их. Смотреть строку `fillers:` в плане.
-- **Дубли:** естественный повтор короткой фразы («то есть…») в пределах 3 фраз может быть принят за дубль — сверять список `retakes:` в `--dry-run`.
-- **EDL:** импорт в DaVinci/Premiere не проверялся; таймкоды покадрово верны (тест).
-- **Кадр по лицу:** берётся медиана 3 кадров на кусок, внутри куска кроп не движется; если человек сильно ходит по кадру — нужен покадровый трекинг.
-- **VFR-исходники** (кружки Telegram) рендерятся с их средним fps (например 29.01) — площадки это принимают.
+- **Fillers:** cutting «ээ/мм» has not yet fired on real speech — `FILLER_PROMPT` may both miss and invent them. Read the `fillers:` line of the plan.
+- **Retakes:** a natural repeat of a short phrase («то есть…», or a game character repeating the chosen dialogue line) within 3 phrases can be taken for a retake — check `retakes:` in `--dry-run`.
+- **EDL:** import into DaVinci/Premiere not tried; timecodes are frame-exact (test).
+- **Face framing:** median of 3 frames per piece, the crop does not move inside a piece; a person walking around the frame (or a game cutscene switching cameras) needs per-frame tracking.
+- **Streams:** a small webcam in the corner is not found by the face model — the crop centres on the game UI. A "webcam on top, game below" layout would fit stream clips better.
+- **VFR sources** (Telegram circles) render at their average fps (e.g. 29.01) — platforms accept it.
 
-## Установленные скиллы (`.claude/skills`, уровень проекта)
+## Installed skills (`.claude/skills`, project level)
 
-- **Remotion** (`remotion-*`, 12 шт., remotion-dev/skills) — React-композиции Remotion: создание, captions, рендер, studio, карты. Только инструкции; сеть — поиск по докам remotion.dev.
-- **iart-ai/tiktok-video-skills** — `short-form-video` (hook → удержание → луп, safe areas 9:16), `caption-animation`, `lower-thirds`, `countdown-video`.
-- **video-editing-skill** (6missedcalls) — bash-скрипты на ffmpeg: trim, jumpcut, caption, overlay, speed. Транскрипция переделана на faster-whisper (`scripts/transcribe_fw.py`, cuda, large-v3, ru, word timestamps) из `.venv` проекта. `onboard.sh` удалён — он ставил скилл в `~/.claude` вне проекта.
+- **Remotion** (`remotion-*`, 12, remotion-dev/skills) — Remotion React compositions: create, captions, render, studio, maps. Instructions only; network — search in remotion.dev docs.
+- **iart-ai/tiktok-video-skills** — `short-form-video` (hook → retention → loop, 9:16 safe areas), `caption-animation`, `lower-thirds`, `countdown-video`.
+- **video-editing-skill** (6missedcalls) — ffmpeg bash scripts: trim, jumpcut, caption, overlay, speed. Transcription switched to faster-whisper (`scripts/transcribe_fw.py`, large-v3, ru, word timestamps, GPU or CPU) from the project `.venv`. `onboard.sh` removed — it installed the skill into `~/.claude`, outside the project.
 
-Файлы Remotion и iart лежат в `.agents/skills`, в `.claude/skills` — ссылки на них (`npx skills add`).
+Remotion and iart files live in `.agents/skills`, `.claude/skills` links to them (`npx skills add`).
 
-## Мои правила монтажа
+## My editing rules
 
-1. **2026-10-14 — переходы между фразами не должны быть резкими.** Запас тишины у краёв склейки 0.15 с (`PAD`).
-2. **2026-10-14 — фоновая музыка должна переходить плавно.** Для роликов с музыкой — `--music` (см. правило 5), музыка тогда вообще не режется. ~~Кроссфейд 0.3 с на всех склейках~~ — заменён на 30 мс по ТЗ проекта от 2026-10-14 (`XFADE`).
-3. **2026-10-14 — плавный зум на склейках.** Чередование 100%/108%, переход 0.5 с по центру склейки (`ZOOM`, `ZOOM_T`).
-4. **2026-10-14 — плавный переход к концу ролика.** Хвост 1 с после последней фразы, fade в чёрное и тишину (`OUTRO`).
-5. **2026-10-14 — если музыка — один трек, использовать его целиком, а не резать.** Запуск с `--music`: Demucs отделяет голос, режется только голос, исходный трек идёт под ним одним куском.
-6. **2026-10-14 — геймплей-шортсы: из песни брать только припев; звук из видео выключать только по просьбе.** По умолчанию звук игры остаётся под музыкой (`GAME_VOL` 0.45); `GAME_VOL = 0` — только если пользователь попросил. Припевы искать по тексту (Whisper по вокалу после Demucs) + по звуку (chroma), резать по сильным долям, склеивать припевы подряд до длины видео (`rl_short.py`, `CHORUSES`).
+1. **2026-10-14 — no abrupt transitions between phrases.** 0.15 s of silence kept at cut edges (`PAD`).
+2. **2026-10-14 — background music must transition smoothly.** Videos with music run with `--music` (rule 5), so the music is not cut at all. ~~0.3 s crossfade on every cut~~ — replaced by 30 ms per the project spec of 2026-10-14 (`XFADE`).
+3. **2026-10-14 — smooth zoom on cuts.** Alternating 100%/108%, 0.5 s transition centred on the cut (`ZOOM`, `ZOOM_T`).
+4. **2026-10-14 — smooth ending.** 1 s tail after the last phrase, fade to black and silence (`OUTRO`).
+5. **2026-10-14 — if the music is one track, use it whole, don't cut it.** Run with `--music`: Demucs splits the voice off, only the voice is cut, the original track plays under it in one piece.
+6. **2026-10-14 — gameplay Shorts: only the song's chorus; mute the game sound only on request.** By default game sound stays under the music (`GAME_VOL` 0.45); `GAME_VOL = 0` only when the user asks. Find choruses by lyrics (Whisper on the Demucs vocal stem) + by sound (chroma), cut on downbeats, chain choruses to the video length (`rl_short.py`, `CHORUSES`).

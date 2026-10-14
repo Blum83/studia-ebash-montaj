@@ -10,7 +10,7 @@ Usage:  .venv\\Scripts\\python montage.py video.mp4 [--music] [--makeup] [--deno
         --lang=xx: speech language other than Russian (e.g. game characters in English)
 Output: out/<name>_edit.mp4, out/<name>.ass, out/<name>.srt, out/<name>.edl (cuts for DaVinci/Premiere);
         caches in out/cache/ (delete *.words.json to re-transcribe)
-Rules:  CLAUDE.md, section "Мои правила монтажа"
+Rules:  CLAUDE.md, section "My editing rules"
 """
 import bisect
 import functools

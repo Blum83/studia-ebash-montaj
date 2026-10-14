@@ -84,7 +84,7 @@ Open the project folder in Claude Code and write, for example:
 
 > edit `C:\Users\me\Videos\raw.mp4`
 
-Claude reads [`CLAUDE.md`](CLAUDE.md) (the whole pipeline and the style rules), shows the plan and renders. Then correct it in words: "bigger captions", "don't cut pauses that hard", "add music". **Every correction is written into `CLAUDE.md` as a rule** ("Мои правила монтажа" — my editing rules) and applied to every next video — that is how the project learns your style.
+Claude reads [`CLAUDE.md`](CLAUDE.md) (the whole pipeline and the style rules), shows the plan and renders. Then correct it in words: "bigger captions", "don't cut pauses that hard", "add music". **Every correction is written into `CLAUDE.md` as a rule** ("My editing rules") and applied to every next video — that is how the project learns your style.
 
 > `CLAUDE.md` already contains the repository author's rules (smooth transitions, zoom on cuts, …). Keep them or delete them — it is a style, not a requirement.
 
