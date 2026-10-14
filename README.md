@@ -1,42 +1,51 @@
 # studia-ebash-montaj
 
-Монтаж рилсов и шортсов (9:16) из «говорящей головы» на русском — одной командой или словами в Claude Code.
+[Русский](README.ru.md) · **English**
 
-Кидаешь сырое видео → получаешь готовый ролик 1080×1920:
+Talking-head Reels / Shorts (9:16) edited in one command — or by plain words in Claude Code.
 
-- **вырезаны паузы** длиннее 0.4 с и **неудачные дубли** (если фраза начата несколько раз — остаётся последняя попытка);
-- **вырезаны «ээ», «мм»**;
-- **пословные субтитры** по центру, по 2–3 слова, текущее слово подсвечено и «подпрыгивает»;
-- **кадр 9:16 следует за лицом**, на склейках плавный зум, в конце затемнение;
-- **громкость −14 LUFS** (как требуют Reels/Shorts/TikTok);
-- рядом лежат `.srt` и `.edl` — открыть монтаж в DaVinci Resolve / Premiere и доправить руками.
+Drop in a raw video → get a finished 1080×1920 clip:
 
-Перед рендером печатается план: что будет вырезано и почему. Его можно посмотреть и без рендера (`--dry-run`).
+- **pauses** longer than 0.4 s and **failed takes** are cut (a phrase started several times keeps only the last attempt);
+- **fillers** ("uh", "um" — Russian «ээ», «мм») are cut;
+- **word-by-word captions** in the centre, 2–3 words per line, the current word highlighted with a small pop;
+- **the 9:16 frame follows the face**, smooth zoom on cuts, fade to black at the end;
+- **loudness −14 LUFS**, what Reels/Shorts/TikTok normalise to;
+- an `.srt` and an `.edl` next to it — open the edit in DaVinci Resolve / Premiere and fine-tune by hand.
+
+Before rendering it prints a plan: what will be cut and why. `--dry-run` shows only the plan.
+
+## Languages
+
+Speech is **Russian by default**. Any language Whisper knows works with `--lang=xx` (`en`, `uk`, `de`, …).
+Without the flag, speech in another language stops the run — otherwise Whisper would silently translate it.
+Filler cutting is Russian-only for now; in other languages fillers simply stay.
+The project instructions for Claude ([`CLAUDE.md`](CLAUDE.md)) and the script messages are in Russian — Claude reads them in any language you write to it.
 
 ---
 
-## Что нужно
+## Requirements
 
 | | |
 |---|---|
-| Windows 10/11 | проверено на Windows 11; на Linux/macOS должно работать, но не проверялось |
-| Видеокарта NVIDIA (RTX 30/40/50) | с ней ролик в пару минут обрабатывается за ~1 мин. **Без неё тоже работает**, но в разы медленнее (процессор) |
-| ~10 ГБ на диске | модели скачаются сами при первом запуске: Whisper large-v3 ~3 ГБ, PyTorch ~3 ГБ |
-| [Claude Code](https://claude.com/claude-code) | по желанию — чтобы монтировать словами. Скрипты работают и без него |
+| Windows 10/11 | tested on Windows 11; Linux/macOS should work but are untested |
+| NVIDIA GPU (RTX 30/40/50) | a couple of minutes of video takes ~1 min. **Works without one too**, several times slower (CPU) |
+| ~10 GB of disk | models download on first run: Whisper large-v3 ~3 GB, PyTorch ~3 GB |
+| [Claude Code](https://claude.com/claude-code) | optional — to edit by words. The scripts run without it |
 
-## Установка (один раз, ~15 минут)
+## Install (once, ~15 minutes)
 
-Открой PowerShell и выполни по очереди.
+Open PowerShell and run in order.
 
-**1. Программы** (если ещё не стоят):
+**1. Tools** (skip what you already have):
 
 ```powershell
 winget install Git.Git Python.Python.3.14 Gyan.FFmpeg
 ```
 
-Закрой и снова открой PowerShell — иначе `ffmpeg` не найдётся. Проверка: `ffmpeg -version`.
+Close and reopen PowerShell, otherwise `ffmpeg` is not found. Check: `ffmpeg -version`.
 
-**2. Проект:**
+**2. Project:**
 
 ```powershell
 git clone https://github.com/Blum83/studia-ebash-montaj
@@ -45,81 +54,81 @@ python -m venv .venv
 .venv\Scripts\python -m pip install --upgrade pip
 ```
 
-**3. PyTorch для видеокарты** (нужен для отделения голоса от музыки):
+**3. PyTorch for the GPU** (used to separate voice from music):
 
 ```powershell
 .venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Без NVIDIA — то же без `--index-url ...` (поставится версия для процессора).
+No NVIDIA card — the same without `--index-url ...` (installs the CPU build).
 
-**4. Остальное:**
+**4. Everything else:**
 
 ```powershell
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-**5. Проверка** (без видео и видеокарты, пару секунд):
+**5. Check** (no video, no GPU, a few seconds):
 
 ```powershell
 .venv\Scripts\python test_montage.py
 ```
 
-Должно напечатать `ok` и `ok makeup`.
+It should print `ok` and `ok makeup`.
 
-## Как пользоваться
+## Usage
 
-### Словами в Claude Code (удобнее)
+### By words in Claude Code (easier)
 
-Открой папку проекта в Claude Code и напиши, например:
+Open the project folder in Claude Code and write, for example:
 
-> смонтируй `C:\Users\me\Videos\raw.mp4`
+> edit `C:\Users\me\Videos\raw.mp4`
 
-Claude сам прочитает [`CLAUDE.md`](CLAUDE.md) (там весь пайплайн и правила стиля), покажет план и отрендерит. Дальше правишь словами: «субтитры крупнее», «не режь паузы так сильно», «добавь музыку». **Каждая правка записывается в `CLAUDE.md` правилом** («Мои правила монтажа») и применяется ко всем следующим роликам — так проект учится твоему стилю.
+Claude reads [`CLAUDE.md`](CLAUDE.md) (the whole pipeline and the style rules), shows the plan and renders. Then correct it in words: "bigger captions", "don't cut pauses that hard", "add music". **Every correction is written into `CLAUDE.md` as a rule** ("Мои правила монтажа" — my editing rules) and applied to every next video — that is how the project learns your style.
 
-> В `CLAUDE.md` уже есть правила автора репозитория (плавные переходы, зум на склейках и т.д.). Оставь их или удали — это твой стиль, не обязательный.
+> `CLAUDE.md` already contains the repository author's rules (smooth transitions, zoom on cuts, …). Keep them or delete them — it is a style, not a requirement.
 
-### Командой (без Claude)
+### By command (no Claude)
 
 ```powershell
-.venv\Scripts\python montage.py C:\path\raw.mp4 --dry-run   # только план: что вырежется
-.venv\Scripts\python montage.py C:\path\raw.mp4             # монтаж
+.venv\Scripts\python montage.py C:\path\raw.mp4 --dry-run   # plan only: what will be cut
+.venv\Scripts\python montage.py C:\path\raw.mp4             # edit
 ```
 
-Результат — в папке `out\`: `raw_edit.mp4`, `raw.ass` (субтитры), `raw.srt`, `raw.edl`.
+Output goes to `out\`: `raw_edit.mp4`, `raw.ass` (captions), `raw.srt`, `raw.edl`.
 
-| Флаг | Когда |
+| Flag | When |
 |---|---|
-| `--music` | в видео играет фоновая музыка: голос отделится от неё нейросетью, режется только голос, а трек идёт под ним целиком |
-| `--denoise` | шумная комната, вентилятор, улица |
-| `--makeup` | лёгкий макияж на лице (помада, румяна, сглаживание кожи) |
-| `--lang=en` | речь не на русском. Без флага на чужом языке скрипт остановится — иначе Whisper молча «переводит» |
-| `--dry-run` | показать план и не рендерить |
+| `--music` | background music in the video: a neural net splits the voice from it, only the voice is cut, the track plays on uncut |
+| `--denoise` | noisy room, fan, street |
+| `--makeup` | light makeup on the face (lipstick, blush, skin smoothing) |
+| `--lang=en` | speech is not Russian (see [Languages](#languages)) |
+| `--dry-run` | show the plan, don't render |
 
-Настройки (паузы, размер и цвет субтитров, зум…) — константы в начале [`montage.py`](montage.py), у каждой комментарий.
+Settings (pauses, caption size and colour, zoom…) are constants at the top of [`montage.py`](montage.py), each with a comment.
 
-## Ещё скрипты
+## Other scripts
 
-| Файл | Что делает |
+| File | What it does |
 |---|---|
-| [`rl_short.py`](rl_short.py) | шортс из игровых клипов под музыку: клипы встык, склейки в такт песне, только припев. **Пример автора** — пути к клипам (`SRC`, `CLIPS`) и песне (`MUSIC_GLOB`) поменять на свои |
-| [`fetch.py`](fetch.py) | из записи эфира на YouTube находит громкие моменты (крики, реакции) и скачивает только эти куски |
-| [`upload.py`](upload.py) | загрузка на YouTube. Нужен свой OAuth-ключ Google в `secrets\client_secret.json` (инструкция в начале файла) |
-| [`yt_check.py`](yt_check.py) | что YouTube думает о твоих видео: блокировки по странам, «для детей», попадёт ли в Shorts |
-| [`makeup.py`](makeup.py) | макияж отдельно от монтажа |
+| [`rl_short.py`](rl_short.py) | a Short from game clips set to music: clips back to back, cuts on the song's beat, chorus only. **The author's example** — change the clip paths (`SRC`, `CLIPS`) and the song (`MUSIC_GLOB`) to yours |
+| [`fetch.py`](fetch.py) | finds the loud moments (shouts, reactions) in a YouTube stream recording and downloads only those pieces |
+| [`upload.py`](upload.py) | upload to YouTube. Needs your own Google OAuth client in `secrets\client_secret.json` (instructions at the top of the file) |
+| [`yt_check.py`](yt_check.py) | what YouTube thinks of your videos: country blocks, "made for kids", will it get into Shorts |
+| [`makeup.py`](makeup.py) | makeup on its own, without editing |
 
-## Скиллы для Claude Code
+## Skills for Claude Code
 
-В `.claude/skills` лежат готовые скиллы, Claude подхватит их сам:
+`.claude/skills` holds ready skills Claude picks up by itself:
 
-- **Remotion** — анимированные титры, переходы, графика кодом (когда ffmpeg мало);
-- **short-form-video, caption-animation, lower-thirds** — хуки, удержание, 9:16 safe areas, плашки с именами;
-- **video-editing-skill** — простые bash-утилиты на ffmpeg (обрезка, ускорение, надписи).
+- **Remotion** — animated titles, transitions, graphics in code (when ffmpeg is not enough);
+- **short-form-video, caption-animation, lower-thirds** — hooks, retention, 9:16 safe areas, name plates;
+- **video-editing-skill** — simple ffmpeg bash tools (trim, speed up, text overlays).
 
-## Если что-то не так
+## Troubleshooting
 
-- **Вырезало лишнее / оставило паузы** — сначала `--dry-run`, посмотри строки `retakes:` и `fillers:`. Естественный повтор фразы («то есть… то есть») иногда принимается за дубль. Порог тишины — `SILENCE_BELOW` в `montage.py`.
-- **Поменял настройки, а результат тот же** — транскрипт кешируется в `out\cache\*.words.json`, удали его.
-- **`speech is 'en' ... not 'ru'`** — речь не русская, добавь `--lang=en`.
-- **`ffmpeg` не найден** — перезапусти PowerShell после установки.
-- **Очень долго** — нет видеокарты NVIDIA или не встал PyTorch с CUDA (шаг 3). Проверка: `.venv\Scripts\python -c "import torch; print(torch.cuda.is_available())"` → `True`.
+- **Cut too much / left pauses** — run `--dry-run` first and read the `retakes:` and `fillers:` lines. A natural repeat ("I mean… I mean") is sometimes taken for a failed take. The silence threshold is `SILENCE_BELOW` in `montage.py`.
+- **Changed settings, same result** — the transcript is cached in `out\cache\*.words.json`, delete it.
+- **`speech is 'en' ... not 'ru'`** — the speech is not Russian, add `--lang=en`.
+- **`ffmpeg` not found** — restart PowerShell after installing.
+- **Very slow** — no NVIDIA card, or PyTorch with CUDA did not install (step 3). Check: `.venv\Scripts\python -c "import torch; print(torch.cuda.is_available())"` → `True`.

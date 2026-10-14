@@ -6,7 +6,7 @@
 ## Пайплайн — `montage.py`
 
 ```
-.venv\Scripts\python montage.py <video> [--music] [--makeup] [--denoise] [--dry-run]
+.venv\Scripts\python montage.py <video> [--music] [--makeup] [--denoise] [--dry-run] [--lang=en]
 ```
 
 1. **Звук → участки речи.** `silencedetect`, пауза > `PAUSE` = 0.4 с; порог тишины относительный — на `SILENCE_BELOW` = 25 dB ниже громких мест этой записи (90-й процентиль), т.к. тихий микс стрима (−46 dB) целиком лежит под любым фиксированным порогом. С `--music` сначала Demucs (htdemucs, GPU) делит голос/музыку, и всё дальше считается по чистому голосу.
