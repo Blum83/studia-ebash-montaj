@@ -1,12 +1,13 @@
 """Talking-head reels montage: drop repeated takes (keeps the last), cut pauses, burn word-level ASS subtitles,
 render 1080x1920 H.264 into out/.
 
-Usage:  .venv\\Scripts\\python montage.py video.mp4 [--music] [--makeup] [--denoise] [--dry-run]
+Usage:  .venv\\Scripts\\python montage.py video.mp4 [--music] [--makeup] [--denoise] [--dry-run] [--lang=en]
         --music:   video has background music -> split voice/music (Demucs), cut only the voice,
                    lay the original track under it uncut
         --makeup:  light makeup on the face before rendering (makeup.py)
         --denoise: FFT noise reduction on the voice (noisy room, fan, street)
         --dry-run: print what would be cut and stop before rendering
+        --lang=xx: speech language other than Russian (e.g. game characters in English)
 Output: out/<name>_edit.mp4, out/<name>.ass, out/<name>.srt, out/<name>.edl (cuts for DaVinci/Premiere);
         caches in out/cache/ (delete *.words.json to re-transcribe)
 Rules:  CLAUDE.md, section "Мои правила монтажа"
@@ -31,7 +32,7 @@ W, H = 1080, 1920
 MODEL = "large-v3"
 LANG = "ru"
 PAUSE = 0.4           # gaps longer than this (s) are cut
-SILENCE_DB = -35      # below this level counts as a pause; raise (e.g. -30) for noisy rooms
+SILENCE_BELOW = 25    # dB under the recording's loud level (90th pct) counts as a pause; lower it for noisy rooms
 PAD = 0.15            # silence (s) kept on each side of speech at a cut
 XFADE = 0.03          # audio crossfade (s) at each cut, no clicks
 TAKE_MATCH = 0.6      # share of a phrase found contiguously in a later phrase => failed take
@@ -47,7 +48,7 @@ POP = 112             # current word grows 100% -> POP% ...
 POP_MS = 80           # ... over this many ms
 LUFS = -14            # Reels/Shorts/TikTok normalise to about -14 LUFS anyway
 PEAK = 0.84           # limiter ceiling, about -1.5 dBFS
-MAX_GAIN = 20         # dB; a near-silent take is left quiet rather than turned into amplified hiss
+MAX_GAIN = 40         # dB; a stream mix at -46 LUFS needs ~32, an empty take is not pushed further into hiss
 DENOISE = "afftdn=nf=-25"
 LANG_SURE = 0.8       # stop when Whisper is this sure the speech is not LANG
 # fillers Whisper writes when prompted for them; "а"/"ну" are real words too, so they stay
@@ -95,10 +96,22 @@ def separate(video):
     return voice, music
 
 
+def silence_db(audio):
+    """Pause threshold relative to this recording: a quiet stream mix (-46 dB mean) has every word under a
+    fixed -35 dB, a loud phone mic has room noise over it."""
+    import numpy as np
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", str(audio), "-vn", "-ac", "1", "-ar", "8000", "-f", "f32le", "-"],
+                         capture_output=True, check=True).stdout
+    x = np.frombuffer(pcm, np.float32)
+    x = x[:len(x) // 2000 * 2000].reshape(-1, 2000)  # 0.25 s windows
+    db = 10 * np.log10((x ** 2).mean(1) + 1e-12)
+    return float(np.percentile(db, 90)) - SILENCE_BELOW if len(db) else -35.0
+
+
 def silences(audio, dur):
     # apad: video longer than its audio track -> the tail counts as silence, not as sound
     log = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(audio), "-vn", "-af",
-                          f"apad=whole_dur={dur},silencedetect=n={SILENCE_DB}dB:d={PAUSE}", "-f", "null", "-"],
+                          f"apad=whole_dur={dur},silencedetect=n={silence_db(audio):.1f}dB:d={PAUSE}", "-f", "null", "-"],
                          capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
     starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", log)]
     ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", log)]
@@ -128,7 +141,7 @@ def transcribe(audio, isl, dur, cache):
         # forced LANG on other speech makes Whisper silently translate it (seen on an English video)
         sys.exit(f"speech is '{lang}' ({prob:.0%} sure), not '{LANG}': set LANG in montage.py or check the file")
     clips = [t for a, b in isl for t in (max(0.0, a - PAD), min(dur, b + PAD))]
-    segments, _ = model.transcribe(str(audio), language=LANG, word_timestamps=True, initial_prompt=FILLER_PROMPT,
+    segments, _ = model.transcribe(str(audio), language=LANG, word_timestamps=True, initial_prompt=FILLER_PROMPT if LANG == "ru" else None,
                                    clip_timestamps=clips or [0, 0.1], condition_on_previous_text=False)
     words = [{"w": w.word.strip(), "s": round(w.start, 3), "e": round(w.end, 3)}
              for seg in segments for w in seg.words]
@@ -410,6 +423,7 @@ def main(video, music=False, dry_run=False, makeup=False, denoise=False):
     print(f"{video.name}: {dur:.1f}s, {w}x{h}")
     isl = islands(silences(speech, dur), dur)
     words = transcribe(speech, isl, dur, CACHE / f"{key(video)}{'.voice' if stems else ''}.words.json")
+    words = [{**w, "w": w["w"].lstrip("-") or w["w"]} for w in words]  # Whisper splits "А-а-а" into "А", "-а"
     phs = [p for p in phrases(words) if not HALLUCINATION.search(text(p))]
     fillers = [w for p in phs for w in p if is_filler(w)]
     phs = [q for q in ([w for w in p if not is_filler(w)] for p in phs) if q]
@@ -452,7 +466,10 @@ def main(video, music=False, dry_run=False, makeup=False, denoise=False):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     flags = {"--music", "--dry-run", "--makeup", "--denoise"}
-    args = [a for a in sys.argv[1:] if a not in flags]
+    for a in sys.argv[1:]:
+        if a.startswith("--lang="):
+            LANG = a.split("=", 1)[1]
+    args = [a for a in sys.argv[1:] if a not in flags and not a.startswith("--lang=")]
     if len(args) != 1 or not Path(args[0]).is_file():
         sys.exit(__doc__)
     main(args[0], *(f in sys.argv for f in ("--music", "--dry-run", "--makeup", "--denoise")))
