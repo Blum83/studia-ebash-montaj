@@ -51,6 +51,26 @@ v = {"status": {"uploadStatus": "processed", "privacyStatus": "public"},
      "fileDetails": {"videoStreams": [{"widthPixels": 1080, "heightPixels": 1920}]}}
 p = problems(v)
 assert len(p) == 2 and "2 странах" in p[0] and "Shorts" in p[1], p
+
+# fillers: cut out of the kept pieces on the frame grid, slivers dropped
+from montage import framing, is_filler, make_edl, steps, subtract
+assert [is_filler({"w": x}) for x in ("Ээ,", "ммм", "хм", "а", "ну", "аам", "эм")] == [1, 1, 1, 0, 0, 1, 1]
+assert subtract([[0, 4]], [(1.0, 1.4)], 25) == [[0, 1.0], [1.4, 4]]
+assert subtract([[0, 4]], [(0.02, 0.5)], 25) == [[0.52, 4]]  # 0..0.0 sliver dropped
+# EDL: frame-exact source/record timecodes
+edl = make_edl([[1.0, 2.0], [3.0, 3.48]], 25, "v.mp4")
+assert "00:00:01:00 00:00:02:00 01:00:00:00 01:00:01:00" in edl and "01:00:01:00 01:00:01:12" in edl, edl
+# face framing: crop follows the face but stays inside the frame
+cw, ch, xs, ys, px, py = framing([(0.9, 0.5), (0.5, 0.5)], [[0, 1], [1, 2]], 1920, 1080)
+assert (cw, ch) == (606, 1080) and xs == [1920 - 606, 1920 / 2 - 303] and abs(px[1] - 0.5) < 1e-9
+assert steps("t", [0, 1, 2], [5, 5, 7]) == "5.0000+2.0000*gte(t,2.0000)"
+# rl_short: every cut lands on a beat, clip ends (the goal) untouched, starts never below 0
+from rl_short import on_beat
+grid = np.arange(0, 30, 0.4)
+cl = on_beat([("a", 2.0, 5.1), ("b", 0.0, 3.0), ("c", 0.1, 4.0)], grid)
+cuts = np.cumsum([e - s for _, s, e in cl])
+assert all(min(abs(grid - c)) < 1e-9 for c in cuts), cuts
+assert [e for _, _, e in cl] == [5.1, 3.0, 4.0] and all(s >= 0 for _, s, _ in cl), cl
 print("ok")
 
 # makeup: tint moves colour only inside the mask and keeps lightness roughly

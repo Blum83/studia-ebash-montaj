@@ -8,6 +8,10 @@ import itertools
 import subprocess
 from pathlib import Path
 
+import numpy as np
+
+from montage import CACHE, normalize
+
 SRC = Path(r"F:\Rocket League")
 # (file, start, end) — replays start with the previous goal's "SCORED!" banner, so their first ~2 s are cut
 CLIPS = [
@@ -34,25 +38,65 @@ W, H, FPS = 1080, 1920, 60
 OUT = Path(__file__).parent / "out" / "rl_short.mp4"
 
 
+def song_beats():
+    cache = CACHE / (Path(MUSIC).stem + ".beats.npy")
+    if not cache.exists():
+        import librosa
+        y, sr = librosa.load(MUSIC, sr=22050, mono=True)
+        CACHE.mkdir(parents=True, exist_ok=True)
+        np.save(cache, librosa.beat.beat_track(y=y, sr=sr, units="time")[1])
+    return np.load(cache)
+
+
+def music_parts(total):
+    parts, left = [], total
+    for a, b in itertools.cycle(CHORUSES):
+        parts.append((a, min(b, a + left)))
+        left -= parts[-1][1] - a
+        if left <= 0:
+            return parts
+
+
+def out_beats(parts, beats):
+    """Song beats mapped onto the output timeline of the chained chorus parts."""
+    out, off = [], 0.0
+    for a, b in parts:
+        out += [off + t - a for t in beats if a <= t < b]
+        off += b - a
+    return np.array(out)
+
+
+def on_beat(clips, grid, min_len=1.0, fps=FPS):
+    """Shift each clip's start (never its end: the goal) so every cut lands on the nearest beat,
+    rounded to a whole output frame so the video does not drift from the music cut by cut."""
+    out, cum = [], 0.0
+    for f, s, e in clips:
+        ok = [t for t in grid if cum + min_len <= t <= cum + e]  # keeps start >= 0 and the clip >= min_len
+        t = min(ok, key=lambda t: abs(t - (cum + e - s))) if ok else cum + e - s
+        t = round(t * fps) / fps
+        out.append((f, e - (t - cum), e))
+        cum = t
+    return out
+
+
 def main():
     n = len(CLIPS)
-    total = sum(e - s for _, s, e in CLIPS)
+    clips = on_beat(CLIPS, out_beats(music_parts(sum(e - s for _, s, e in CLIPS) + 10), song_beats()))
+    total = sum(e - s for _, s, e in clips)
     g = []
-    for i, (_, s, e) in enumerate(CLIPS):
-        g.append(f"[{i}:v]trim={s}:{e},setpts=PTS-STARTPTS,fps={FPS},scale=2560:1440,setsar=1[v{i}];"
-                 f"[{i}:a]atrim={s}:{e},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,"
+    for i, (_, s, e) in enumerate(clips):
+        # fps first, then pad the last frame and cut to the exact length: VFR sources otherwise lose
+        # a frame per clip and the picture drifts ahead of the music
+        g.append(f"[{i}:v]fps={FPS},trim=start={s:.4f},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=0.2,"
+                 f"trim=duration={e - s:.4f},scale=2560:1440,setsar=1[v{i}];"
+                 f"[{i}:a]atrim={s:.4f}:{e},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,"
                  f"afade=t=in:d={FADE},afade=t=out:st={e - s - FADE:.3f}:d={FADE}[a{i}];")
     g.append("".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca];")
     g.append(f"[cv]split[bg][fg];"
              f"[bg]scale=-2:{H},crop={W}:{H},gblur=sigma=30,eq=brightness=-0.15[bgb];"
              f"[fg]scale={W}:-2[fgs];"
              f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,fade=t=out:st={total - OUTRO:.3f}:d={OUTRO},format=yuv420p[v];")
-    parts, left = [], total
-    for a, b in itertools.cycle(CHORUSES):
-        parts.append((a, min(b, a + left)))
-        left -= parts[-1][1] - a
-        if left <= 0:
-            break
+    parts = music_parts(total)
     k = len(parts)
     g.append(f"[{n}:a]asplit={k}" + "".join(f"[m{j}]" for j in range(k)) + ";")
     for j, (a, b) in enumerate(parts):
@@ -70,7 +114,9 @@ def main():
                     "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "20", "-c:a", "aac", "-b:a", "192k",
                     "-movflags", "+faststart", str(OUT)], check=True)
     graph.unlink()
-    print(f"done: {OUT} ({total:.1f}s, {n} goals)")
+    normalize(OUT)
+    shift = max(abs(a[1] - b[1]) for a, b in zip(CLIPS, clips))
+    print(f"done: {OUT} ({total:.1f}s, {n} goals, cuts on the beat, starts moved <= {shift:.2f}s)")
 
 
 if __name__ == "__main__":

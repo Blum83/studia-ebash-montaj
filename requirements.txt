@@ -10,3 +10,5 @@ google-auth-oauthlib
 # --makeup (makeup.py)
 mediapipe
 opencv-contrib-python
+# rl_short.py: beats of the song
+librosa
