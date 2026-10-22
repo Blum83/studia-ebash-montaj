@@ -9,7 +9,8 @@ Drop in a raw video → get a finished 1080×1920 clip:
 - **pauses** longer than 0.4 s and **failed takes** are cut (a phrase started several times keeps only the last attempt);
 - **fillers** ("uh", "um" — Russian «ээ», «мм») are cut;
 - **word-by-word captions** in the centre, 2–3 words per line, the current word highlighted with a small pop;
-- **the 9:16 frame follows the face**, smooth zoom on cuts, fade to black at the end;
+- **the 9:16 frame follows the face frame by frame**: the camera glides after you when you walk, stays put while you just sway (dead zone), jumps only on cuts where it is hidden;
+- **zoom**: soft 100% ↔ 108% punch-in on cuts, long pieces slowly creep in by 3% so a static shot breathes; fade to black at the end;
 - **loudness −14 LUFS**, what Reels/Shorts/TikTok normalise to;
 - an `.srt` and an `.edl` next to it — open the edit in DaVinci Resolve / Premiere and fine-tune by hand.
 
@@ -116,6 +117,7 @@ Settings (pauses, caption size and colour, zoom…) are constants at the top of 
 | [`upload.py`](upload.py) | upload to YouTube. Needs your own Google OAuth client in `secrets\client_secret.json` (instructions at the top of the file) |
 | [`yt_check.py`](yt_check.py) | what YouTube thinks of your videos: country blocks, "made for kids", will it get into Shorts |
 | [`makeup.py`](makeup.py) | makeup on its own, without editing |
+| [`make_robot.py`](make_robot.py) | a test "talking head" with no real face: a drawn robot walks around a 1920×1080 frame, mouth moving with any voice file — for checking framing and tracking. `python make_robot.py voice.wav samples\robot.mp4` |
 
 ## Skills for Claude Code
 
