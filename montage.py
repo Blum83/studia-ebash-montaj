@@ -27,6 +27,8 @@ import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
 
+import numpy as np
+
 OUT = Path(__file__).parent / "out"
 CACHE = OUT / "cache"
 W, H = 1080, 1920
@@ -41,6 +43,11 @@ TAKE_MIN_WORDS = 2
 TAKE_LOOKAHEAD = 3    # how many phrases ahead to look for the retake
 ZOOM = 0.08           # cuts alternate 100% / 108% framing to hide jump cuts
 ZOOM_T = 0.5          # zoom transition (s), centred on the cut
+DRIFT = 0.03          # slow creep-in (share) over a long piece, so a static shot breathes
+DRIFT_MIN = 3.0       # pieces at least this long (s) get the drift
+TRACK_HZ = 10        # face samples per second for the camera path
+CAM_DEAD = 0.04       # camera holds until the face moves this share of the frame width (no swaying along)
+CAM_SIGMA = 0.4       # camera path smoothing (s, gaussian, zero-phase)
 OUTRO = 1.0           # tail kept after the last word (s), faded to black / silence
 MAX_WORDS = 3         # subtitle lines of 2-3 words
 FONT_SIZE = 110
@@ -311,29 +318,57 @@ def probe(video):
 
 
 def faces(video, iv, w, h):
-    """Face centre (0..1, 0..1) per kept piece, median of 3 frames; centre of frame when none found."""
+    """Face centre (0..1, 0..1) sampled TRACK_HZ times a second over each kept piece: per piece a list of
+    (t, fx, fy), fx/fy None where no face was found."""
     import cv2
     from makeup import landmarker
     mp, lm = landmarker()
-    cap, out, prev, t_ms = cv2.VideoCapture(str(video)), [], (0.5, 0.45), 0
+    cap, out, t_ms = cv2.VideoCapture(str(video)), [], 0
     for a, b in iv:
-        pts = []
-        for t in (a + (b - a) * q for q in (0.25, 0.5, 0.75)):
-            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-            ok, frame = cap.read()
-            if not ok:
+        # one seek per piece, then frames in order: a seek per sample decodes from the keyframe every time
+        cap.set(cv2.CAP_PROP_POS_MSEC, a * 1000)
+        samples, track = list(np.arange(a, b, 1 / TRACK_HZ)), []
+        while len(track) < len(samples) and cap.grab():
+            t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000  # this frame's time
+            j = len(track)
+            while j < len(samples) and samples[j] <= t + 0.5 / TRACK_HZ:
+                j += 1
+            due = samples[len(track):j]
+            if not due:
                 continue
+            ok, frame = cap.retrieve()
             t_ms = max(t_ms + 1, int(t * 1000))  # detect_for_video needs increasing timestamps
-            res = lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB,
-                                               data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), t_ms)
-            if res.face_landmarks:
-                p = res.face_landmarks[0]
-                pts.append((sum(q.x for q in p) / len(p), sum(q.y for q in p) / len(p)))
-        prev = tuple(sorted(c)[len(c) // 2] for c in zip(*pts)) if pts else prev
-        out.append(prev)
+            res = ok and lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                                      data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), t_ms)
+            p = res.face_landmarks[0] if res and res.face_landmarks else None
+            fx, fy = (sum(q.x for q in p) / len(p), sum(q.y for q in p) / len(p)) if p else (None, None)
+            track += [(s, fx, fy) for s in due]
+        track += [(s, None, None) for s in samples[len(track):]]  # video ended early
+        out.append(track)
     cap.release()
     lm.close()
     return out
+
+
+def smooth_path(ts, vals, out_ts, dead, sigma):
+    """Camera centre at out_ts from noisy face samples: gaps filled, outliers dropped (median of 5), a dead zone
+    (the target only moves once the face is `dead` away, then to the face itself), then a zero-phase gaussian
+    (offline, so no lag: the camera eases in a little before the move). None when the piece has no face at all."""
+    v = np.array([np.nan if x is None else x for x in vals], float)
+    ok = ~np.isnan(v)
+    if not ok.any():
+        return None
+    v = np.interp(np.arange(len(v)), np.flatnonzero(ok), v[ok])
+    v = np.median(np.lib.stride_tricks.sliding_window_view(np.pad(v, 2, mode="edge"), 5), axis=1)
+    target, c = [], v[0]
+    for i, x in enumerate(v):
+        settled = i >= TRACK_HZ and np.ptp(v[i - TRACK_HZ:i + 1]) < dead / 4  # the face stayed put for a second
+        c = x if abs(x - c) > dead or (settled and abs(x - c) > dead / 8) else c  # finish centring after a walk
+        target.append(c)
+    s = max(sigma * TRACK_HZ, 1e-6)
+    k = np.exp(-0.5 * (np.arange(-int(3 * s) - 1, int(3 * s) + 2) / s) ** 2)
+    sm = np.convolve(np.pad(target, len(k) // 2, mode="edge"), k / k.sum(), mode="valid")
+    return np.interp(out_ts, ts, sm)
 
 
 def steps(var, starts, vals):
@@ -342,22 +377,54 @@ def steps(var, starts, vals):
                                           for k in range(1, len(vals)) if vals[k] != vals[k - 1]])
 
 
-def framing(fc, iv, w, h):
-    """9:16 crop x/y following the face per piece, and the face position inside that crop for the zoom centre."""
+def framing(tracks, iv, w, h, fps):
+    """9:16 crop following the face frame by frame (smooth_path; free jump at cuts, where it is hidden):
+    per piece arrays of crop x/y for its output frames, and the face position inside the crop (piece median)
+    for the zoom centre. A piece without a face keeps the previous camera (centre at the start)."""
     cw, ch = min(w, h * 9 / 16) // 2 * 2, min(h, w * 16 / 9) // 2 * 2
-    xs = [min(max(fx * w - cw / 2, 0), w - cw) for fx, _ in fc]
-    ys = [min(max(fy * h - ch / 2, 0), h - ch) for _, fy in fc]
-    px = [(fx * w - x) / cw for (fx, _), x in zip(fc, xs)]
-    py = [(fy * h - y) / ch for (_, fy), y in zip(fc, ys)]
+    xs, ys, px, py, prev = [], [], [], [], (0.5, 0.45)
+    for (a, b), tr in zip(iv, tracks):
+        ts = [t for t, _, _ in tr] or [a]
+        # exactly the frames render()'s select keeps: grid frames k/fps in [a, b) shifted half a frame
+        ft = np.arange(math.ceil(a * fps - 0.5), math.ceil(b * fps - 0.5)) / fps
+        cx = smooth_path(ts, [x for _, x, _ in tr] or [None], ft, CAM_DEAD, CAM_SIGMA)
+        cy = smooth_path(ts, [y for _, _, y in tr] or [None], ft, CAM_DEAD * w / h, CAM_SIGMA)
+        cx = np.full(len(ft), prev[0]) if cx is None else cx
+        cy = np.full(len(ft), prev[1]) if cy is None else cy
+        prev = (cx[-1], cy[-1]) if len(ft) else prev
+        x, y = np.clip(cx * w - cw / 2, 0, w - cw), np.clip(cy * h - ch / 2, 0, h - ch)
+        xs.append(x)
+        ys.append(y)
+        seen = [(fx, fy, np.interp(t, ft, x), np.interp(t, ft, y)) for t, fx, fy in tr if fx is not None] if len(ft) else []
+        px.append(float(np.median([(fx * w - xx) / cw for fx, _, xx, _ in seen])) if seen else 0.5)
+        py.append(float(np.median([(fy * h - yy) / ch for _, fy, _, yy in seen])) if seen else 0.45)
     return cw, ch, xs, ys, px, py
 
 
-def zoom_expr(cuts):
-    """1 + ZOOM on odd pieces; smoothstep from one level to the next across each cut (zoompan input time `it`)."""
+def camera_cmds(xs, ys, fps):
+    """sendcmd script: the crop@cam position for every output frame where it changes (half a frame early,
+    so float timestamps never miss the frame)."""
+    lines, last = [], None
+    for n, (x, y) in enumerate(zip(np.concatenate(xs), np.concatenate(ys))):
+        cur = (round(x), round(y))
+        if cur != last:
+            lines.append(f"{max(0.0, (n - 0.5) / fps):.4f} crop@cam x {cur[0]}, crop@cam y {cur[1]};")
+            last = cur
+    return "\n".join(lines) + "\n"
+
+
+def zoom_expr(cuts, total, fps):
+    """1 + ZOOM on odd pieces, smootherstep (no jolt at either end) from one level to the next across each cut;
+    pieces longer than DRIFT_MIN also creep in by DRIFT over their length and drop back at the cut, where the
+    jump is hidden. zoompan input time `it`."""
     terms = []
     for k, c in enumerate(cuts):
         u = f"clip((it-{c:.4f})/{ZOOM_T}+0.5,0,1)"
-        terms.append(f"{ZOOM if k % 2 == 0 else -ZOOM}*(3*pow({u},2)-2*pow({u},3))")
+        terms.append(f"{ZOOM if k % 2 == 0 else -ZOOM}*(6*pow({u},5)-15*pow({u},4)+10*pow({u},3))")
+    for s, e in zip([0.0] + cuts, cuts + [total]):
+        if e - s >= DRIFT_MIN:
+            # drops half a frame early: a rounded cut time must never leave the next piece's first frame zoomed
+            terms.append(f"{DRIFT}*clip((it-{s:.4f})/{e - s:.4f},0,1)*lt(it,{e - 0.5 / fps:.4f})")
     return "+".join(["1"] + terms)
 
 
@@ -383,15 +450,16 @@ def render(video, iv, ass_text, out, fps_str, fps, frame, stems=None, denoise=Fa
     total = sum(b - a for a, b in iv)
     cuts = list(itertools.accumulate(b - a for a, b in iv))[:-1]
     end = f"st={max(0, total - OUTRO):.4f}:d={min(OUTRO, total):.4f}"
-    # 9:16 crop that follows the face (jumps only at cuts, where it is hidden), zoom centred on the face
-    # shortcut: zoompan rounds x/y to whole pixels, slight wobble during the zoom; pre-upscale if it shows
+    # 9:16 crop that follows the face every frame (camera_cmds; jumps only at cuts, where it is hidden),
+    # zoom centred on the face
+    # shortcut: crop and zoompan move in whole pixels, a slow pan steps by ~2 output px; pre-upscale if it shows
     cw, ch, xs, ys, px, py = frame
-    starts = [0.0] + cuts
+    starts = [0.0] + [c - 0.5 / fps for c in cuts]  # half a frame early, like the crop: switch on the cut frame
     zx = f"clip(({steps('it', starts, px)})*iw-iw/zoom/2,0,iw-iw/zoom)"
     zy = f"clip(({steps('it', starts, py)})*ih-ih/zoom/2,0,ih-ih/zoom)"
-    graph = (f"[0:v]fps={fps_str},select='{sel(0.5 / fps)}',setpts=N/FRAME_RATE/TB,"
-             f"crop={cw:.0f}:{ch:.0f}:'{steps('t', starts, xs)}':'{steps('t', starts, ys)}',"
-             f"zoompan=z='{zoom_expr(cuts)}':x='{zx}':y='{zy}':d=1:s={W}x{H}:fps={fps_str},"
+    graph = (f"[0:v]fps={fps_str},select='{sel(0.5 / fps)}',setpts=N/FRAME_RATE/TB,sendcmd=f=cam.txt,"
+             f"crop@cam={cw:.0f}:{ch:.0f}:{xs[0][0]:.0f}:{ys[0][0]:.0f}:exact=1,"  # exact: odd x too, 1-px pan steps
+             f"zoompan=z='{zoom_expr(cuts, total, fps)}':x='{zx}':y='{zy}':d=1:s={W}x{H}:fps={fps_str},"
              f"subtitles=subs.ass,fade=t=out:{end},format=yuv420p[v];")
     pre = f"{DENOISE}," if denoise else ""
     master = f"afade=t=out:{end}[a]"  # loudness is set afterwards by normalize()
@@ -404,6 +472,7 @@ def render(video, iv, ass_text, out, fps_str, fps, frame, stems=None, denoise=Fa
     with tempfile.TemporaryDirectory() as tmp:
         # relative subtitle name in cwd=tmp: avoids escaping Windows paths inside the filtergraph
         Path(tmp, "subs.ass").write_text(ass_text, encoding="utf-8")
+        Path(tmp, "cam.txt").write_text(camera_cmds(xs, ys, fps), encoding="utf-8")
         Path(tmp, "graph.txt").write_text(graph, encoding="utf-8")
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "warning", "-stats", *inputs,
                         "-/filter_complex", "graph.txt", "-map", "[v]", "-map", "[a]",
@@ -471,7 +540,7 @@ def main(video, music=False, dry_run=False, makeup=False, denoise=False):
     (OUT / f"{video.stem}.ass").write_text(ass_text, encoding="utf-8")
     (OUT / f"{video.stem}.srt").write_text(make_srt(kept, f), encoding="utf-8")
     (OUT / f"{video.stem}.edl").write_text(make_edl(iv, fps, video.name), encoding="utf-8")
-    frame = framing(faces(video, iv, w, h), iv, w, h)
+    frame = framing(faces(video, iv, w, h), iv, w, h, fps)
     out = OUT / f"{video.stem}_edit.mp4"
     if makeup:
         from makeup import apply

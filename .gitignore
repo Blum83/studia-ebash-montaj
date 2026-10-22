@@ -10,5 +10,6 @@ secrets/
 # renders, caches, test media
 out/
 samples/*.mp4
+samples/*.wav
 samples/*.ass
 samples/*.words.json
