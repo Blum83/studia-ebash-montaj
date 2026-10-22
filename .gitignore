@@ -1,5 +1,6 @@
 # environment
 .venv/
+.venv-tts/
 __pycache__/
 .claude/settings.local.json
 
@@ -11,5 +12,8 @@ secrets/
 out/
 samples/*.mp4
 samples/*.wav
+examples/cache/
+examples/*.mp4
+examples/*.srt
 samples/*.ass
 samples/*.words.json

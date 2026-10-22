@@ -1,0 +1,18 @@
+{
+ "say": {"Ctrl+W": "контрол дабл-ю"},
+ "segments": [
+  {"shots": [{"src": "../samples/robot.mp4", "ss": 1}],
+   "text": {"ru": "Привет! Это пример демо-ролика: кадры, голос и субтитры собираются из одного файла сценария.",
+            "uk": "Привіт! Це приклад демо-ролика: кадри, голос і субтитри збираються з одного файлу сценарію.",
+            "en": "Hi! This is a sample demo video: shots, voice and captions all come from one script file."}},
+  {"shots": [{"src": "../samples/robot.mp4", "ss": 3, "roi": [240, 120, 840, 1000]},
+             {"src": "../samples/robot.mp4", "ss": 3, "roi": [380, 640, 700, 800]}],
+   "text": {"ru": "Камера плавно наезжает на нужную область, а следующий план того же кадра — просто переезд.",
+            "uk": "Камера плавно наїжджає на потрібну ділянку, а наступний план того ж кадру — просто переїзд.",
+            "en": "The camera eases into the region you mark, and the next region of the same picture is a pan."}},
+  {"shots": [{"src": "../samples/robot.mp4", "ss": 20}],
+   "text": {"ru": "Между разными кадрами — мягкий переход. Ctrl+W закрывает вкладку. Спасибо!",
+            "uk": "Між різними кадрами — м'який перехід. Ctrl+W закриває вкладку. Дякую!",
+            "en": "Different shots get a soft crossfade. Ctrl+W closes the tab. Thanks!"}}
+ ]
+}

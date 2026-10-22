@@ -99,6 +99,15 @@ d1, d2 = tempfile.mkdtemp(), tempfile.mkdtemp()
 open(os.path.join(d1, "IMG_0001.mp4"), "wb").write(b"a"); open(os.path.join(d2, "IMG_0001.mp4"), "wb").write(b"bb")
 assert key(os.path.join(d1, "IMG_0001.mp4")) != key(os.path.join(d2, "IMG_0001.mp4"))
 
+# demo.py: caption times for the script's spelling from what Whisper heard ("чат-спейс" for "ChatSpace")
+from demo import align
+heard = [{"w": "Начнем", "s": 0.0, "e": 0.5}, {"w": "с", "s": 0.5, "e": 0.6}, {"w": "чат-спейс.", "s": 0.6, "e": 1.2},
+         {"w": "Траты", "s": 1.4, "e": 1.8}]
+r = align("Начнём с ChatSpace. Траты", heard)
+assert [w["w"] for w in r] == ["Начнём", "с", "ChatSpace.", "Траты"] and r[0]["s"] == 0.0 and r[3]["s"] == 1.4
+assert abs(r[2]["s"] - 0.6) < 1e-9 and abs(r[2]["e"] - 1.4) < 1e-9  # unmatched word fills the gap between neighbours
+assert all(w["s"] is not None for w in align("a b", []))
+
 # rl_short: every cut lands on a beat, clip ends (the goal) untouched, starts never below 0
 from rl_short import on_beat
 grid = np.arange(0, 30, 0.4)

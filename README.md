@@ -119,6 +119,60 @@ Settings (pauses, caption size and colour, zoom…) are constants at the top of 
 | [`makeup.py`](makeup.py) | makeup on its own, without editing |
 | [`make_robot.py`](make_robot.py) | a test "talking head" with no real face: a drawn robot walks around a 1920×1080 frame, mouth moving with any voice file — for checking framing and tracking. `python make_robot.py voice.wav samples\robot.mp4` |
 
+## Demo videos with voice-over
+
+[`demo.py`](demo.py) makes a 16:9 feature demo from slides, screenshots and screen clips: an eased zoom into the region you mark, soft crossfades, a voice-over in Russian, Ukrainian or English (a designed voice or **your own cloned voice**) and word-by-word captions. Everything comes from a script file, see [`examples/robot_demo.json`](examples/robot_demo.json):
+
+```json
+{"segments": [
+  {"shots": [{"src": "slides/01.png"},
+             {"src": "shots/spending.png", "roi": [1170, 40, 1495, 320]},
+             {"src": "live/clip.mp4", "ss": 9, "crop_top": 57, "roi": [1830, 600, 2530, 994]}],
+   "text": {"ru": "Траты фана теперь разбиты по типам.", "uk": "Витрати фана тепер розбиті за типами."}}
+]}
+```
+
+Paths are relative to the script. `roi` is the region to zoom into (x0, y0, x1, y1 in the picture's pixels; no `roi` — a slow drift over the whole picture). The segment's shots share its narration time. Keep the week's material (script, slides, screenshots) in `out\demo\<name>\` — it stays out of git.
+
+**Install the voice model (once, ~10 minutes, a few GB).** [OmniVoice](https://github.com/k2-fsa/OmniVoice) is local and free, reads ru/uk/en with English product names inside, clones a voice from 10–15 s. It does not install on Python 3.14, so it gets its own environment on 3.13:
+
+```powershell
+winget install Python.Python.3.13
+py -3.13 -m venv .venv-tts
+.venv-tts\Scripts\python -m pip install --upgrade pip
+.venv-tts\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+.venv-tts\Scripts\python -m pip install omnivoice
+```
+
+No NVIDIA card — torch without `--index-url ...`; it works on the CPU, much slower. The model downloads itself on the first run.
+
+**Run:**
+
+```powershell
+.venv\Scripts\python make_robot.py some_voice.wav samples\robot.mp4   # only for the example: the robot clip
+.venv\Scripts\python demo.py examples\robot_demo.json                 # -> examples\demo_ru.mp4
+.venv\Scripts\python demo.py out\demo\week\script.json --lang uk      # -> out\demo\week\demo_uk.mp4
+```
+
+| Option | What it does |
+|---|---|
+| `--lang ru\|uk\|en` | narration language (the script needs that text) |
+| `--design "male"` | the voice is designed from a description once (`"female, low pitch"`, …) and saved to `out\voices\<design>-<lang>`, so it stays the same week to week |
+| `--voice DIR` | clone the voice in DIR instead (see below) |
+| `--speed 1.2` | faster speech; clones often speak slower than the original |
+| `--tts eleven` | ElevenLabs instead of OmniVoice: key in `secrets\elevenlabs.key`, voice id in env `ELEVEN_VOICE`; `"say"` in the script fixes words it mispronounces (`"Ctrl+W": "контрол дабл-ю"`) |
+
+**Your own voice.** Record 20–40 s in your own words, in the tone of the video, with the phone's voice recorder (Telegram voice messages are heavily compressed), in a quiet room. Then:
+
+```powershell
+.venv\Scripts\python make_ref.py my_voice.m4a ru secrets\voice\me-ru     # optional 4th arg: start second
+.venv\Scripts\python demo.py out\demo\week\script.json --voice secrets\voice\me-ru --speed 1.2
+```
+
+`make_ref.py` cuts 7–14 s on quiet points between words (a sample starting on the tail of a word makes every phrase start with that sound) and writes `ref.wav` + `ref.txt`. Check `ref.txt`: a recognition typo there makes the clone worse. Clone only voices whose owners agree; keep samples in `secrets\` — they stay out of git.
+
+The voice is cached in the script's `cache\` folder: a rebuild with the same text and voice takes seconds, changed sentences are voiced again.
+
 ## Skills for Claude Code
 
 `.claude/skills` holds ready skills Claude picks up by itself:
